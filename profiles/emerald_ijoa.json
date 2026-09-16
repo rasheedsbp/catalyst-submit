@@ -1,0 +1,41 @@
+{
+  "id": "emerald_ijoa",
+  "name": "Emerald (IJOA / structured abstract)",
+  "publisher": "Emerald",
+  "aliases": ["emerald", "ijoa", "international journal of organizational analysis",
+              "journal of management development", "management decision"],
+  "latex": {
+    "documentclass": "\\documentclass[12pt]{article}",
+    "class_file": null,
+    "bib_style": "apalike",
+    "title_cmd": "\\title",
+    "author_mode": "plain",
+    "abstract_env": "abstract",
+    "keywords_cmd": "\\textbf{Keywords:}",
+    "notes": "Emerald has no official class; submit as Word. LaTeX output is a plain-article approximation."
+  },
+  "word": {
+    "page_size": "a4",
+    "margins_in": {"top": 1.0, "bottom": 1.0, "left": 1.0, "right": 1.0},
+    "columns": 1,
+    "body_font": "Times New Roman",
+    "body_size": 12,
+    "line_spacing": 2.0,
+    "title_size": 14,
+    "heading_numbering": "decimal",
+    "heading_case": "sentence",
+    "abstract_bold_label": true
+  },
+  "reference_style": "harvard-cite-them-right",
+  "abstract": {
+    "type": "structured",
+    "max_words": 250,
+    "sections": ["Purpose", "Design/methodology/approach", "Findings",
+                 "Research limitations/implications", "Practical implications",
+                 "Social implications", "Originality/value"]
+  },
+  "keywords": {"min": 5, "max": 8, "case": "title"},
+  "figure_caption_position": "below",
+  "table_caption_position": "above",
+  "template_file": null
+}

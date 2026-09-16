@@ -1,0 +1,31 @@
+{
+  "id": "ieee_access",
+  "name": "IEEE Access",
+  "publisher": "IEEE",
+  "aliases": ["ieee access", "access", "ieeeaccess"],
+  "latex": {
+    "documentclass": "\\documentclass{ieeeaccess}",
+    "class_file": "ieeeaccess.cls",
+    "bib_style": "IEEEtran",
+    "author_mode": "ieee",
+    "notes": "Single column IEEE Access class from the official IEEE Author Center kit."
+  },
+  "word": {
+    "page_size": "letter",
+    "margins_in": {"top": 1.0, "bottom": 1.0, "left": 0.75, "right": 0.75},
+    "columns": 1,
+    "body_font": "Times New Roman",
+    "body_size": 10,
+    "line_spacing": 1.0,
+    "title_size": 20,
+    "heading_numbering": "roman_upper",
+    "heading_case": "upper",
+    "abstract_bold_label": true
+  },
+  "reference_style": "ieee",
+  "abstract": {"type": "plain", "max_words": 250},
+  "keywords": {"min": 4, "max": 8, "case": "title"},
+  "figure_caption_position": "below",
+  "table_caption_position": "above",
+  "template_file": null
+}

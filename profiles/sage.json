@@ -1,0 +1,34 @@
+{
+  "id": "sage",
+  "name": "SAGE (sagej)",
+  "publisher": "SAGE",
+  "aliases": ["sage", "sagej", "sagepub", "sage journals"],
+  "latex": {
+    "documentclass": "\\documentclass[Afour,sagev,times]{sagej}",
+    "class_file": "sagej.cls",
+    "bib_style": "SageV",
+    "title_cmd": "\\title",
+    "author_mode": "sage",
+    "abstract_env": "abstract",
+    "keywords_cmd": "\\keywords",
+    "notes": "SAGE sagej.cls from the SAGE LaTeX template kit (sagej.cls, SageV.bst, SageH.bst). Two-column. Fill \\author, \\affiliation, \\corrauth and \\email."
+  },
+  "word": {
+    "page_size": "a4",
+    "margins_in": {"top": 1.0, "bottom": 1.0, "left": 1.0, "right": 1.0},
+    "columns": 2,
+    "body_font": "Times New Roman",
+    "body_size": 10,
+    "line_spacing": 1.0,
+    "title_size": 18,
+    "heading_numbering": "none",
+    "heading_case": "sentence",
+    "abstract_bold_label": true
+  },
+  "reference_style": "vancouver",
+  "abstract": {"type": "plain", "max_words": 250},
+  "keywords": {"min": 3, "max": 6, "case": "sentence"},
+  "figure_caption_position": "below",
+  "table_caption_position": "above",
+  "template_file": null
+}

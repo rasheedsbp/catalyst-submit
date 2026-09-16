@@ -1,0 +1,36 @@
+{
+  "id": "elsevier_generic",
+  "name": "Elsevier (elsarticle generic)",
+  "publisher": "Elsevier",
+  "aliases": ["elsevier", "elsarticle", "applied energy", "expert systems with applications",
+              "eswa", "computers and electrical engineering", "energy reports", "measurement",
+              "journal of energy storage", "ad hoc networks"],
+  "latex": {
+    "documentclass": "\\documentclass[preprint,12pt]{elsarticle}",
+    "class_file": "elsarticle.cls",
+    "bib_style": "elsarticle-num",
+    "title_cmd": "\\title",
+    "author_mode": "elsevier",
+    "abstract_env": "abstract",
+    "keywords_cmd": "\\begin{keyword}",
+    "notes": "Use elsarticle.cls from CTAN. Frontmatter goes inside \\begin{frontmatter}."
+  },
+  "word": {
+    "page_size": "a4",
+    "margins_in": {"top": 1.0, "bottom": 1.0, "left": 1.0, "right": 1.0},
+    "columns": 1,
+    "body_font": "Times New Roman",
+    "body_size": 12,
+    "line_spacing": 2.0,
+    "title_size": 16,
+    "heading_numbering": "decimal",
+    "heading_case": "sentence",
+    "abstract_bold_label": true
+  },
+  "reference_style": "elsevier-numeric",
+  "abstract": {"type": "plain", "max_words": 250},
+  "keywords": {"min": 4, "max": 6, "case": "sentence"},
+  "figure_caption_position": "below",
+  "table_caption_position": "above",
+  "template_file": null
+}

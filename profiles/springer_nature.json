@@ -1,0 +1,36 @@
+{
+  "id": "springer_nature",
+  "name": "Springer Nature (sn-jnl)",
+  "publisher": "Springer",
+  "aliases": ["springer", "sn-jnl", "snjnl", "multimedia tools and applications", "mtap",
+              "wireless personal communications", "wpc", "soft computing", "neural computing and applications",
+              "journal of supercomputing", "cluster computing", "scientific reports"],
+  "latex": {
+    "documentclass": "\\documentclass[pdflatex,sn-standardnature]{sn-jnl}",
+    "class_file": "sn-jnl.cls",
+    "bib_style": "sn-standardnature",
+    "title_cmd": "\\title",
+    "author_mode": "springer",
+    "abstract_env": "abstract",
+    "keywords_cmd": "\\keywords",
+    "notes": "Springer Nature LaTeX kit. Options: sn-basic, sn-mathphys, sn-standardnature, sn-vancouver."
+  },
+  "word": {
+    "page_size": "a4",
+    "margins_in": {"top": 1.0, "bottom": 1.0, "left": 1.0, "right": 1.0},
+    "columns": 1,
+    "body_font": "Times New Roman",
+    "body_size": 12,
+    "line_spacing": 1.5,
+    "title_size": 16,
+    "heading_numbering": "decimal",
+    "heading_case": "sentence",
+    "abstract_bold_label": true
+  },
+  "reference_style": "springer-basic-author-date",
+  "abstract": {"type": "plain", "max_words": 250},
+  "keywords": {"min": 4, "max": 6, "case": "sentence"},
+  "figure_caption_position": "below",
+  "table_caption_position": "above",
+  "template_file": null
+}

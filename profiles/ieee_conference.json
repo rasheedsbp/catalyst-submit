@@ -1,0 +1,35 @@
+{
+  "id": "ieee_conference",
+  "name": "IEEE Conference (IEEEtran, two-column)",
+  "publisher": "IEEE",
+  "aliases": ["ieee", "ieeetran", "ieee conference", "ieee transactions", "ieee tii", "ieee iot journal",
+              "ieee transactions on industrial informatics"],
+  "latex": {
+    "documentclass": "\\documentclass[conference]{IEEEtran}",
+    "class_file": "IEEEtran.cls",
+    "bib_style": "IEEEtran",
+    "title_cmd": "\\title",
+    "author_mode": "ieee",
+    "abstract_env": "abstract",
+    "keywords_cmd": "\\begin{IEEEkeywords}",
+    "notes": "Two-column. Use [journal] instead of [conference] for Transactions."
+  },
+  "word": {
+    "page_size": "letter",
+    "margins_in": {"top": 0.75, "bottom": 1.0, "left": 0.625, "right": 0.625},
+    "columns": 2,
+    "body_font": "Times New Roman",
+    "body_size": 10,
+    "line_spacing": 1.0,
+    "title_size": 24,
+    "heading_numbering": "roman_upper",
+    "heading_case": "title",
+    "abstract_bold_label": true
+  },
+  "reference_style": "ieee",
+  "abstract": {"type": "plain", "max_words": 200},
+  "keywords": {"min": 3, "max": 6, "case": "lower"},
+  "figure_caption_position": "below",
+  "table_caption_position": "above",
+  "template_file": null
+}

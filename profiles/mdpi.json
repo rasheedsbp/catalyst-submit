@@ -1,0 +1,35 @@
+{
+  "id": "mdpi",
+  "name": "MDPI",
+  "publisher": "MDPI",
+  "aliases": ["mdpi", "sensors", "applied sciences", "energies", "sustainability", "electronics",
+              "mathematics", "symmetry", "diagnostics"],
+  "latex": {
+    "documentclass": "\\documentclass[journal,article,submit,moreauthors,pdftex]{Definitions/mdpi}",
+    "class_file": "mdpi.cls",
+    "bib_style": "mdpi",
+    "title_cmd": "\\Title",
+    "author_mode": "mdpi",
+    "abstract_env": "abstract",
+    "keywords_cmd": "\\keyword",
+    "notes": "Requires the full MDPI LaTeX package (Definitions/ folder)."
+  },
+  "word": {
+    "page_size": "a4",
+    "margins_in": {"top": 1.0, "bottom": 1.0, "left": 0.79, "right": 0.79},
+    "columns": 1,
+    "body_font": "Palatino Linotype",
+    "body_size": 10,
+    "line_spacing": 1.15,
+    "title_size": 16,
+    "heading_numbering": "decimal",
+    "heading_case": "title",
+    "abstract_bold_label": true
+  },
+  "reference_style": "multidisciplinary-digital-publishing-institute",
+  "abstract": {"type": "plain", "max_words": 200},
+  "keywords": {"min": 3, "max": 10, "case": "lower"},
+  "figure_caption_position": "below",
+  "table_caption_position": "above",
+  "template_file": null
+}
