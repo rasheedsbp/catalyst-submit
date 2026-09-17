@@ -108,6 +108,55 @@ def test_llm_picks_live_model_and_falls_back():
         assert pa.llm_reply("q", "ctx") is None            # guided mode takes over
 
 
+def test_key_name_is_case_insensitive():
+    with mock.patch.dict(os.environ, {"Groq_API_Key": " gsk_abc "}, clear=False):
+        os.environ.pop("GROQ_API_KEY", None)
+        assert pa._secret("GROQ_API_KEY") == "gsk_abc"
+        assert pa.llm_status() == "Groq"
+
+
+def test_diagnose_reports_real_error_and_fallback_models():
+    class R:
+        def __init__(self, ok, js=None, code=200, text=""):
+            self.ok, self._js, self.status_code, self.text = ok, js or {}, code, text
+
+        def json(self):
+            return self._js
+    pa._MODEL_CACHE.clear()
+    env = {"GROQ_API_KEY": "gsk_testkey1234"}
+    # model list unreachable -> fallback names are still tried; 401 is reported
+    with mock.patch.dict(os.environ, env, clear=False), \
+         mock.patch("requests.get", side_effect=OSError("blocked")), \
+         mock.patch("requests.post", return_value=R(False, code=401,
+                                                     text='{"error":"Invalid API Key"}')):
+        report = "\n".join(pa.diagnose())
+    assert "key found" in report and "llama-3.3-70b-versatile" in report
+    assert "401" in report and "Invalid API Key" in report
+    # first model decommissioned (400) -> next model works
+    calls = []
+
+    def post(url, **kw):
+        calls.append(kw["json"]["model"])
+        if len(calls) == 1:
+            return R(False, code=400, text="model decommissioned")
+        return R(True, {"choices": [{"message": {"content": "OK"}}]})
+    with mock.patch.dict(os.environ, env, clear=False), \
+         mock.patch("requests.get", return_value=R(True, {"data": []})), \
+         mock.patch("requests.post", side_effect=post):
+        assert pa.llm_reply("q", "c") == "OK" and len(calls) == 2
+
+
+def test_manuscript_default_offered_for_name():
+    s = pa.Session([pa.Field("corr_name:", "corr_name", "Corresponding author's full name:",
+                             locations=[("p/03_Cover_letter.docx", "para", 1, "[name]")])],
+                   known={"authors": ["Asha Rao", "Vikram Singh"], "corresponding": None})
+    assert "Asha Rao" in s.prompt()
+    with mock.patch.object(pa, "llm_reply", return_value=None):
+        assert "Asha Rao" in s.handle("suggest")
+    s.handle("ok")
+    assert s.fields[0].answer == "Asha Rao"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
