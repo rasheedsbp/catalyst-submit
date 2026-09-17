@@ -522,9 +522,71 @@ def blinded(ms: Manuscript) -> Manuscript:
 # --------------------------------------------------------------------------- #
 # 5. package
 # --------------------------------------------------------------------------- #
+@dataclass
+class FormatOptions:
+    """The formatter's own settings, applied to every manuscript in the pack."""
+    template_bytes: bytes | None = None      # journal's Word template (.docx/.dotx)
+    tex_extras: dict = field(default_factory=dict)   # .cls/.sty/.bst from a kit
+    equation_mode: str = "native"            # "native" (editable) or "image"
+    keep_masthead: bool = True
+    float_mode: str = "journal"              # LaTeX: "journal" floats or "inline"
+    compact: bool = False
+    add_missing_mentions: bool = True        # "as shown in Fig. 3" for uncited objects
+    include_latex: bool = True
+    include_pdf: bool = True
+
+
+def format_manuscript(ms: Manuscript, prof: dict, opt: FormatOptions) -> dict:
+    """Run the journal formatter exactly as the Formatter page does."""
+    from . import render_docx, render_latex, preview, xref, checks
+    out = copy.deepcopy(ms)
+    applied: list[str] = []
+    if opt.add_missing_mentions:
+        missing = xref.find_missing(out)
+        if missing:
+            added = xref.apply(out, missing, {m["label"] for m in missing})
+            if added:
+                applied.append(f"added in-text mentions for {len(added)} object(s)")
+    res = {"report": checks.run(out, prof), "applied": applied, "warning": "",
+           "ms": out}
+
+    def word(m):
+        try:
+            return render_docx.render(m, prof, equation_mode=opt.equation_mode,
+                                      template_bytes=opt.template_bytes,
+                                      keep_masthead=opt.keep_masthead)
+        except Exception as exc:  # noqa: BLE001
+            if not opt.template_bytes:
+                raise
+            res["warning"] = (f"Could not build inside the uploaded template "
+                              f"({type(exc).__name__}); used the {prof['name']} profile.")
+            return render_docx.render(m, prof, equation_mode=opt.equation_mode)
+
+    res["docx"] = word(out)
+    res["docx_blinded"] = word(blinded(out))
+    res["zip"] = None
+    if opt.include_latex:
+        try:
+            res["zip"] = render_latex.build_zip(out, prof, extra_files=opt.tex_extras,
+                                                float_mode=opt.float_mode,
+                                                compact=opt.compact)
+        except Exception as exc:  # noqa: BLE001
+            res["warning"] += f" LaTeX project not built ({type(exc).__name__})."
+    res["pdf"] = None
+    if opt.include_pdf and preview.soffice_available():
+        try:
+            res["pdf"] = preview.render_pdf(res["docx"])
+        except Exception:  # noqa: BLE001
+            pass
+    res["html"] = preview.html_preview(out, prof)
+    return res
+
+
 def build_pack(ms: Manuscript, prof: dict, g: Guidelines,
                reqs: list[Requirement] | None = None,
-               include_latex: bool = True) -> tuple[bytes, list[Requirement]]:
+               include_latex: bool = True,
+               fmt: FormatOptions | None = None,
+               formatted: dict | None = None) -> tuple[bytes, list[Requirement]]:
     from . import render_docx, render_latex
     reqs = reqs if reqs is not None else extract_requirements(g.text)
     by = {r.key: r for r in reqs}
@@ -539,8 +601,18 @@ def build_pack(ms: Manuscript, prof: dict, g: Guidelines,
             r.output = output or r.output
             r.action = action or r.action
 
+    fmt = fmt or FormatOptions(include_latex=include_latex, include_pdf=False,
+                               add_missing_mentions=False)
+    formatted = formatted or format_manuscript(ms, prof, fmt)
+    ms = formatted["ms"]
+    if formatted.get("warning"):
+        notes.append(formatted["warning"].strip())
+    notes += [f"Formatter: {a}" for a in formatted.get("applied", [])]
+
     # always useful, whether or not the guide names them
-    files["01_Manuscript.docx"] = render_docx.render(ms, prof)
+    files["01_Manuscript.docx"] = formatted["docx"]
+    if formatted.get("pdf"):
+        files["01_Manuscript.pdf"] = formatted["pdf"]
     files["02_Title_page.docx"] = title_page(ms, journal)
     mark("title_page", "02_Title_page.docx", "Fill any [placeholders]; add ORCID iDs.")
     mark("orcid", "02_Title_page.docx", "Add each author's ORCID iD.")
@@ -555,7 +627,7 @@ def build_pack(ms: Manuscript, prof: dict, g: Guidelines,
              else "Replace the [placeholder] text.")
 
     if by["blinded"].status != NOT_FOUND:
-        files["04_Manuscript_blinded.docx"] = render_docx.render(blinded(ms), prof)
+        files["04_Manuscript_blinded.docx"] = formatted["docx_blinded"]
         mark("blinded", "04_Manuscript_blinded.docx",
              "Also remove self-identifying phrases (e.g. 'in our previous work [12]').")
     if by["highlights"].status != NOT_FOUND:
@@ -578,12 +650,16 @@ def build_pack(ms: Manuscript, prof: dict, g: Guidelines,
         files["08_Suggested_reviewers.csv"] = reviewers_csv(by["reviewers"])
         mark("reviewers", "08_Suggested_reviewers.csv",
              "Add experts with no recent co-authorship or shared affiliation.")
-    if include_latex:
-        try:
-            files["09_LaTeX_project.zip"] = render_latex.build_zip(ms, prof)
-            mark("latex_source", "09_LaTeX_project.zip")
-        except Exception as exc:  # noqa: BLE001
-            notes.append(f"LaTeX project not built: {type(exc).__name__}")
+    if formatted.get("zip"):
+        files["09_LaTeX_project.zip"] = formatted["zip"]
+        mark("latex_source", "09_LaTeX_project.zip")
+    fails = [m for lvl, m in formatted.get("report", []) if lvl == "fail"]
+    warns = [m for lvl, m in formatted.get("report", []) if lvl == "warn"]
+    if fails or warns:
+        files["00_Format_check.txt"] = ("\n".join(
+            [f"FAIL  {m}" for m in fails] + [f"WARN  {m}" for m in warns])).encode()
+        notes.append(f"Format check: {len(fails)} failure(s), {len(warns)} warning(s) "
+                     "— see 00_Format_check.txt")
 
     for key, action in (("graphical_abstract", "Design a single-panel image summarising "
                                                "the work (cannot be generated automatically)."),
