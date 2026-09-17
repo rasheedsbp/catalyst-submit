@@ -408,14 +408,31 @@ _MODEL_CACHE: dict[str, str] = {}
 
 
 def _secret(name: str) -> str | None:
-    v = os.environ.get(name)
-    if v:
-        return v
+    """Key from env or Streamlit secrets, whatever the capitalisation.
+
+    Secret names are case-sensitive, so "Groq_API_Key" would never match
+    "GROQ_API_KEY". Match ignoring case (and '-' vs '_'), and also look one
+    level down, for keys kept under a [section] in secrets.toml.
+    """
+    want = name.lower().replace("-", "_")
+    norm = lambda k: str(k).strip().lower().replace("-", "_")
+    for k, v in os.environ.items():
+        if norm(k) == want and v.strip():
+            return v.strip()
     try:
         import streamlit as st
-        return st.secrets.get(name)
+        sec = st.secrets
+        for k in list(sec.keys()):
+            v = sec[k]
+            if norm(k) == want and isinstance(v, str) and v.strip():
+                return v.strip()
+            if hasattr(v, "keys"):
+                for k2 in list(v.keys()):
+                    if norm(k2) == want and isinstance(v[k2], str) and v[k2].strip():
+                        return v[k2].strip()
     except Exception:  # noqa: BLE001
-        return None
+        pass
+    return None
 
 
 def llm_status() -> str | None:
@@ -425,24 +442,38 @@ def llm_status() -> str | None:
     return None
 
 
-def _pick_model(base: str, key: str, prefs: list[str]) -> str | None:
+LAST_ERROR: dict[str, str] = {}
+# used when the model list cannot be read; tried in order
+FALLBACK_MODELS = {
+    "Groq": ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant",
+             "meta-llama/llama-4-scout-17b-16e-instruct"],
+    "Gemini": ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"],
+    "OpenRouter": ["meta-llama/llama-3.3-70b-instruct:free", "openai/gpt-oss-20b:free"],
+}
+
+
+def _models(name: str, base: str, key: str, prefs: list[str]) -> list[str]:
+    """Candidate models: preferred matches from the live list, then fallbacks."""
     import requests
-    if base in _MODEL_CACHE:
-        return _MODEL_CACHE[base]
+    live: list[str] = []
     try:
         r = requests.get(base + "/models", headers={"Authorization": f"Bearer {key}"},
                          timeout=15)
-        ids = [m.get("id", "") for m in r.json().get("data", [])] if r.ok else []
-    except Exception:  # noqa: BLE001
-        ids = []
-    ids = [i.replace("models/", "") for i in ids
-           if not re.search(r"whisper|tts|embed|guard|vision|image|audio", i, re.I)]
+        if r.ok:
+            live = [str(m.get("id", "")).replace("models/", "")
+                    for m in r.json().get("data", [])]
+        else:
+            LAST_ERROR[name] = f"model list: HTTP {r.status_code} {r.text[:160]}"
+    except Exception as exc:  # noqa: BLE001
+        LAST_ERROR[name] = f"model list: {type(exc).__name__}: {exc}"
+    live = [i for i in live if i and not re.search(
+        r"whisper|tts|embed|guard|vision|image|audio|playai|compound|prompt", i, re.I)]
+    picked = []
     for pref in prefs:
-        hit = [i for i in ids if pref in i]
-        if hit:
-            _MODEL_CACHE[base] = sorted(hit)[-1]
-            return _MODEL_CACHE[base]
-    return None
+        picked += sorted((i for i in live if pref in i and i not in picked), reverse=True)
+    cands = ([_MODEL_CACHE[base]] if base in _MODEL_CACHE else []) + picked + \
+        [m for m in FALLBACK_MODELS.get(name, []) if not live or m in live]
+    return list(dict.fromkeys(cands))[:5]
 
 
 SYSTEM = ("You help an academic author complete journal-submission documents. Be concise "
@@ -457,30 +488,65 @@ def llm_reply(question: str, context: str) -> str | None:
         key = _secret(keyname)
         if not key:
             continue
-        model = _pick_model(base, key, prefs)
-        if not model:
-            continue
-        try:
-            r = requests.post(base + "/chat/completions", timeout=45,
-                              headers={"Authorization": f"Bearer {key}",
-                                       "Content-Type": "application/json"},
-                              json={"model": model, "temperature": 0.3, "max_tokens": 400,
-                                    "messages": [
-                                        {"role": "system", "content": SYSTEM},
-                                        {"role": "user",
-                                         "content": f"Context:\n{context[:3500]}\n\n"
-                                                    f"Question: {question}"}]})
-            if r.ok:
-                txt = r.json()["choices"][0]["message"]["content"].strip()
-                if txt:
-                    return txt
-            if r.status_code in (401, 403):
+        for model in _models(name, base, key, prefs):
+            try:
+                r = requests.post(base + "/chat/completions", timeout=45,
+                                  headers={"Authorization": f"Bearer {key}",
+                                           "Content-Type": "application/json"},
+                                  json={"model": model, "temperature": 0.3,
+                                        "max_tokens": 400,
+                                        "messages": [
+                                            {"role": "system", "content": SYSTEM},
+                                            {"role": "user",
+                                             "content": f"Context:\n{context[:3500]}\n\n"
+                                                        f"Question: {question}"}]})
+            except Exception as exc:  # noqa: BLE001
+                LAST_ERROR[name] = f"{model}: {type(exc).__name__}: {exc}"
                 continue
-            if r.status_code == 404:
-                _MODEL_CACHE.pop(base, None)
-        except Exception:  # noqa: BLE001
-            continue
+            if r.ok:
+                try:
+                    txt = r.json()["choices"][0]["message"]["content"].strip()
+                except Exception:  # noqa: BLE001
+                    txt = ""
+                if txt:
+                    _MODEL_CACHE[base] = model
+                    LAST_ERROR.pop(name, None)
+                    return txt
+            LAST_ERROR[name] = f"{model}: HTTP {r.status_code} {r.text[:200]}"
+            _MODEL_CACHE.pop(base, None)
+            if r.status_code in (401, 403):
+                break                      # bad key: other models won't help
+            if r.status_code == 429:
+                break                      # rate limited: try the next provider
     return None
+
+
+def diagnose() -> list[str]:
+    """Human-readable connection report for the page's 'Test AI' button."""
+    out = []
+    found = False
+    for name, keyname, base, prefs in PROVIDERS:
+        key = _secret(keyname)
+        if not key:
+            continue
+        found = True
+        out.append(f"{name}: key found ({key[:4]}…{key[-4:]}, {len(key)} chars)")
+        if name == "Groq" and not key.startswith("gsk_"):
+            out.append("  ⚠️ Groq keys normally start with 'gsk_' — check you copied the whole key.")
+        cands = _models(name, base, key, prefs)
+        out.append(f"  models to try: {', '.join(cands) or 'none'}")
+        reply = None
+        LAST_ERROR.pop(name, None)
+        if cands:
+            reply = llm_reply("Reply with the single word OK.", "connection test")
+        out.append("  ✅ working — replied: " + reply[:40] if reply else
+                   "  ❌ " + LAST_ERROR.get(name, "no reply"))
+        if reply:
+            break
+    if not found:
+        out.append("No API key found. In Streamlit Cloud: ⋮ → Settings → Secrets, add a line "
+                   'like  GROQ_API_KEY = "gsk_..."  then Save and reboot the app.')
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -495,6 +561,17 @@ class Session:
     fields: list[Field]
     context: str = ""
     i: int = 0
+    known: dict = field(default_factory=dict)     # facts from the manuscript
+
+    def default_for(self, f: Field) -> str | None:
+        k = self.known
+        if f.ptype == "corr_name":
+            return k.get("corresponding") or (k.get("authors") or [None])[0]
+        if f.ptype in ("title", "journal", "keywords"):
+            return k.get(f.ptype) or None
+        if f.ptype == "article_type":
+            return "Original Research Article"
+        return None
 
     def current(self) -> Field | None:
         while self.i < len(self.fields) and (self.fields[self.i].answer is not None
@@ -515,6 +592,9 @@ class Session:
         d, n = self.progress()
         files = sorted({loc[0].split("/")[-1] for loc in f.locations})
         msg = f"**({d + 1}/{n}) {f.question}**\n\n*Goes into: {', '.join(files)}*"
+        dflt = self.default_for(f)
+        if dflt:
+            msg += f"\n\nFrom your manuscript: **{dflt}** — type **ok** to use it."
         if f.hint:
             msg += f"\n\n{f.hint}"
         return msg
@@ -542,6 +622,10 @@ class Session:
             return self.prompt()
         if f is None:
             return self._question(t) or self.prompt()
+        if low in ("ok", "okay", "accept", "use it", "yes please") and self.default_for(f) \
+                and f.ptype != "confirm":
+            f.answer = self.default_for(f)
+            return "Saved ✔\n\n" + self.prompt()
         if low == "skip":
             f.skipped = True
             return "Skipped.\n\n" + self.prompt()
@@ -549,12 +633,20 @@ class Session:
             return (f"Example: *{f.example}*" if f.example else "No example for this one.") \
                 + "\n\n" + self.prompt()
         if low == "suggest":
+            dflt = self.default_for(f)
+            if dflt:
+                return (f"Suggestion from your manuscript: **{dflt}** — type **ok** to use "
+                        "it, or type a different answer.")
             ai = llm_reply(f"Draft a suitable answer for: {f.question}", self.context)
             if ai:
                 return f"Suggested draft (edit before using):\n\n{ai}\n\nPaste or type your final answer."
+            why = ""
+            if llm_status():
+                err = next(iter(LAST_ERROR.values()), "no reply")
+                why = f"\n\n(AI is configured but did not answer: {err[:160]}. Use **Test AI connection** below.)"
             return ((f"Here's a model answer to adapt: *{f.example}*" if f.example
-                     else "No suggestion available offline for this item.")
-                    + "\n\n" + self.prompt())
+                     else "No automatic suggestion for this one — please type it.")
+                    + why + "\n\n" + self.prompt())
         if self._looks_like_question(t):
             return (self._question(t) or "I don't have an answer for that offline.") \
                 + "\n\n" + self.prompt()
@@ -572,6 +664,14 @@ class Session:
 
     def _question(self, t: str) -> str | None:
         return faq_answer(t) or llm_reply(t, self.context)
+
+
+def known_for(ms, journal: str) -> dict:
+    authors = [a.name for a in getattr(ms, "authors", []) or []]
+    corr = next((a.name for a in getattr(ms, "authors", []) or [] if a.corresponding), None)
+    return {"title": getattr(ms, "title", "") or "", "journal": journal or "",
+            "authors": authors, "corresponding": corr,
+            "keywords": ", ".join(getattr(ms, "keywords", []) or [])}
 
 
 def context_for(ms, reqs, journal: str) -> str:
