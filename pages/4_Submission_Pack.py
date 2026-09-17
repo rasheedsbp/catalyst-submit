@@ -254,7 +254,8 @@ if "sp_result" in ss:
         if ss.get("pa_sig") != sig:
             ss["pa_sig"] = sig
             ss["pa"] = pa.Session(pa.scan_pack(R["zip"]),
-                                  pa.context_for(ss.get("sp_ms"), reqs, g.journal or journal))
+                                  pa.context_for(ss.get("sp_ms"), reqs, g.journal or journal),
+                                  known=pa.known_for(ss.get("sp_ms"), g.journal or journal))
             ss["pa_log"] = [("assistant",
                              "Hi! I'll help you fill in everything the package still needs "
                              "before you submit. " + pa.HELP), ("assistant", ss["pa"].prompt())]
@@ -263,9 +264,15 @@ if "sp_result" in ss:
         ai = pa.llm_status()
         d, n = S.progress()
         st.progress(d / n if n else 1.0, text=f"{d} of {n} items filled")
-        st.caption(f"AI help: **on** ({ai} free tier)" if ai else
-                   "Guided mode (free, no key needed). Optional AI answers: add a free "
-                   "GROQ_API_KEY, GEMINI_API_KEY or OPENROUTER_API_KEY to the app's secrets.")
+        cap_c, test_c = st.columns([4, 1])
+        cap_c.caption(f"AI help: **key found** ({ai})" if ai else
+                      "Guided mode (free, no key needed). Optional AI answers: add a free "
+                      "GROQ_API_KEY, GEMINI_API_KEY or OPENROUTER_API_KEY to the app's secrets.")
+        if test_c.button("Test AI connection", use_container_width=True):
+            with st.spinner("Contacting the AI provider…"):
+                ss["pa_diag"] = pa.diagnose()
+        if ss.get("pa_diag"):
+            st.code("\n".join(ss["pa_diag"]), language="text")
         box = st.container(height=460)
         with box:
             for role, msg in ss["pa_log"]:
