@@ -246,8 +246,60 @@ if "sp_result" in ss:
                        f"Submission_{safe}.zip", "application/zip",
                        type="primary", use_container_width=True)
 
-    t_req, t_fmt, t_prev = st.tabs(["Submission requirements", "Format check",
-                                    "Formatted manuscript"])
+    t_chat, t_req, t_fmt, t_prev = st.tabs(["💬 Fill-in assistant", "Submission requirements",
+                                            "Format check", "Formatted manuscript"])
+    with t_chat:
+        from core import pack_assistant as pa
+        sig = hash(R["zip"])
+        if ss.get("pa_sig") != sig:
+            ss["pa_sig"] = sig
+            ss["pa"] = pa.Session(pa.scan_pack(R["zip"]),
+                                  pa.context_for(ss.get("sp_ms"), reqs, g.journal or journal))
+            ss["pa_log"] = [("assistant",
+                             "Hi! I'll help you fill in everything the package still needs "
+                             "before you submit. " + pa.HELP), ("assistant", ss["pa"].prompt())]
+            ss["pa_zip"] = None
+        S = ss["pa"]
+        ai = pa.llm_status()
+        d, n = S.progress()
+        st.progress(d / n if n else 1.0, text=f"{d} of {n} items filled")
+        st.caption(f"AI help: **on** ({ai} free tier)" if ai else
+                   "Guided mode (free, no key needed). Optional AI answers: add a free "
+                   "GROQ_API_KEY, GEMINI_API_KEY or OPENROUTER_API_KEY to the app's secrets.")
+        box = st.container(height=460)
+        with box:
+            for role, msg in ss["pa_log"]:
+                with st.chat_message(role):
+                    st.markdown(msg)
+        with st.form("pa_form", clear_on_submit=True):
+            fc1, fc2 = st.columns([6, 1])
+            user_msg = fc1.text_input("Your answer or question", label_visibility="collapsed",
+                                      placeholder="Type an answer, 'skip', 'suggest', or ask a question…")
+            sent = fc2.form_submit_button("Send", use_container_width=True)
+        q1, q2, q3, q4 = st.columns(4)
+        quick = None
+        if q1.button("Skip", use_container_width=True):
+            quick = "skip"
+        if q2.button("Example", use_container_width=True):
+            quick = "example"
+        if q3.button("Suggest", use_container_width=True):
+            quick = "suggest"
+        if q4.button("Back", use_container_width=True):
+            quick = "back"
+        msg_in = quick or (user_msg if sent and user_msg.strip() else None)
+        if msg_in:
+            with st.spinner("Thinking…"):
+                reply = S.handle(msg_in)
+            ss["pa_log"] += [("user", msg_in), ("assistant", reply)]
+            ss["pa_zip"] = None
+            st.rerun()
+        if d:
+            if ss.get("pa_zip") is None:
+                ss["pa_zip"], _n = pa.apply_answers(R["zip"], S.fields)
+            st.download_button(f"⬇️ Download package with your {d} answers filled in",
+                               ss["pa_zip"], f"Submission_{safe}_filled.zip",
+                               "application/zip", type="primary",
+                               use_container_width=True)
     with t_req:
         df = pd.DataFrame([{"Item": r.label, "Status": r.status, "Detail": r.detail,
                             "File": r.output, "To do": r.action,
