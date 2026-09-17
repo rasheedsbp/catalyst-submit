@@ -40,31 +40,8 @@ with c1:
                               help="Empty = found automatically. The 'Guide for "
                                    "authors' link gives the best results.")
 with c2:
-    tpl_up = st.file_uploader("Journal template (optional)",
-                              type=["docx", "dotx", "zip", "cls"],
-                              help="The publisher's Word template and/or LaTeX kit — "
-                                   "the most accurate formatting.")
     with st.expander("Guidelines blocked? Paste the text instead"):
         pasted = st.text_area("Author guidelines text", height=140)
-
-tpl_bytes, tex_extras = None, {}
-if tpl_up:
-    raw, low = tpl_up.getbuffer().tobytes(), tpl_up.name.lower()
-    if low.endswith((".docx", ".dotx")):
-        tpl_bytes = raw
-    elif low.endswith(".cls"):
-        tex_extras[tpl_up.name] = raw
-    elif low.endswith(".zip"):
-        try:
-            zf = zipfile.ZipFile(io.BytesIO(raw))
-            for n in zf.namelist():
-                nl = n.lower()
-                if nl.endswith((".cls", ".sty", ".bst", ".bib")):
-                    tex_extras[os.path.basename(n)] = zf.read(n)
-                elif nl.endswith((".docx", ".dotx")) and tpl_bytes is None:
-                    tpl_bytes = zf.read(n)
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Could not read that kit: {exc}")
 
 # --------------------------------------------------------------------------- #
 # 2. formatting
@@ -72,14 +49,84 @@ if tpl_up:
 st.subheader("2. Formatting")
 all_profiles = profiles.load_all()
 names = [p["name"] for p in all_profiles]
-AUTO, TEMPLATE = "Auto (journal / publisher from guidelines)", "Use my uploaded template"
-choices = ([TEMPLATE] if (tpl_bytes or tex_extras) else []) + [AUTO] + names
-default = 0 if (tpl_bytes or tex_extras) else choices.index(AUTO)
-fmt_choice = st.selectbox(
-    "Format the manuscript as", choices, index=default,
-    help="Auto finds the journal's real publisher (OpenAlex / guidelines page) and "
-         "applies that journal's own limits from its guidelines. Pick a profile to "
-         "force a format; upload a template for the exact layout.")
+AUTO = "Auto — detect from the journal"
+TEMPLATE = "Use my own template"
+PICK = "Choose a journal format"
+
+source = st.radio("How should the manuscript be formatted?", [TEMPLATE, AUTO, PICK],
+                  index=1, horizontal=True,
+                  help="Use my own template = the Word template or LaTeX kit you "
+                       "downloaded from the journal (most exact). Auto = the "
+                       "journal's publisher layout plus its guideline limits.")
+
+tpl_up = None
+tpl_raw, tpl_name, tpl_bytes, tex_extras = None, None, None, {}
+fmt_choice = AUTO
+if source == TEMPLATE:
+    tpl_up = st.file_uploader(
+        "Upload the template you downloaded from the journal",
+        type=["docx", "dotx", "doc", "dot", "zip", "cls", "tex", "sty"],
+        help="Word template (.docx / .dotx / .doc), a LaTeX class (.cls / .tex), or "
+             "the full LaTeX kit as a .zip (e.g. the Overleaf download).")
+    if tpl_up is None:
+        st.info("⬆️ Upload your template here to use it.")
+    else:
+        tpl_raw, tpl_name = tpl_up.getbuffer().tobytes(), tpl_up.name
+        low = tpl_name.lower()
+        if low.endswith((".doc", ".dot")):
+            # old binary Word: convert so the template can be read
+            from core import preview
+            conv = None
+            if preview.soffice_available():
+                import subprocess
+                tdir = tempfile.mkdtemp(prefix="tpl_")
+                src = os.path.join(tdir, tpl_name)
+                with open(src, "wb") as fh:
+                    fh.write(tpl_raw)
+                subprocess.run(["soffice", "--headless", "--convert-to", "docx",
+                                "--outdir", tdir, src], capture_output=True, timeout=120)
+                out_p = os.path.splitext(src)[0] + ".docx"
+                if os.path.exists(out_p):
+                    conv = open(out_p, "rb").read()
+            if conv:
+                tpl_raw, tpl_name = conv, os.path.splitext(tpl_name)[0] + ".docx"
+                low = tpl_name.lower()
+            else:
+                st.error("This is an old .doc template. Open it in Word and "
+                         "'Save As' .docx, then upload that.")
+                tpl_raw = None
+        if tpl_raw is not None:
+            if low.endswith((".docx", ".dotx")):
+                tpl_bytes = tpl_raw
+            elif low.endswith((".cls", ".sty", ".tex")):
+                tex_extras[tpl_name] = tpl_raw
+            elif low.endswith(".zip"):
+                try:
+                    zf = zipfile.ZipFile(io.BytesIO(tpl_raw))
+                    for n in zf.namelist():
+                        nl = n.lower()
+                        if nl.endswith((".cls", ".sty", ".bst", ".bib")):
+                            tex_extras[os.path.basename(n)] = zf.read(n)
+                        elif nl.endswith((".docx", ".dotx")) and tpl_bytes is None:
+                            tpl_bytes = zf.read(n)
+                    if not (tpl_bytes or tex_extras or
+                            any(n.lower().endswith(".tex") for n in zf.namelist())):
+                        st.error("No Word template or LaTeX files found inside that zip.")
+                        tpl_raw = None
+                except zipfile.BadZipFile:
+                    st.error("That zip file could not be opened.")
+                    tpl_raw = None
+            if tpl_raw is not None:
+                try:
+                    _p, _ = discover.profile_from_template(tpl_name, tpl_raw)
+                    fmt_choice = TEMPLATE
+                    st.success(f"Template read: **{tpl_name}** — formatting will follow it "
+                               f"(gaps filled from {_p.get('derived_from', 'a base layout')}).")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Could not read that template: {type(exc).__name__}: {exc}")
+elif source == PICK:
+    fmt_choice = st.selectbox("Journal format", names)
+choices = [TEMPLATE, AUTO] + names
 
 f1, f2, f3 = st.columns(3)
 with f1:
@@ -104,16 +151,19 @@ with f3:
     want_pdf = st.checkbox("Include PDF of the manuscript", value=True,
                            help="Needs LibreOffice on the server.")
 
+template_missing = source == TEMPLATE and fmt_choice != TEMPLATE
 go = st.button("📦 Format & build submission package", type="primary",
                use_container_width=True,
-               disabled=not (up and (journal or guide_url or pasted or tpl_up)))
+               disabled=not (up and (journal or guide_url or pasted or tpl_up))
+               or template_missing)
+if template_missing:
+    st.caption("Upload your template above, or switch to Auto.")
 
 
 def resolve_profile(g, choice):
     if choice == TEMPLATE:
-        prof, _spec = discover.profile_from_template(
-            tpl_up.name, tpl_bytes or next(iter(tex_extras.values())))
-        return prof, f"your uploaded template ({tpl_up.name})"
+        prof, _spec = discover.profile_from_template(tpl_name, tpl_raw)
+        return prof, f"your uploaded template ({tpl_name})"
     if choice != AUTO:
         pid = next(p["id"] for p in all_profiles if p["name"] == choice)
         return sp.choose_profile(journal, g, explicit_id=pid)
@@ -179,8 +229,9 @@ if "sp_result" in ss:
     st.info(f"**Formatted as {R['prof']}** — {R['why']}.")
     rc1, rc2 = st.columns([3, 1])
     with rc1:
-        again = st.selectbox("Not the right format? Re-format as", choices,
-                             index=choices.index(R["choice"]) if R["choice"] in choices else 0,
+        opts = [c for c in choices if c != TEMPLATE or tpl_raw is not None]
+        again = st.selectbox("Not the right format? Re-format as", opts,
+                             index=opts.index(R["choice"]) if R["choice"] in opts else 0,
                              key="sp_again")
     with rc2:
         st.write("")
