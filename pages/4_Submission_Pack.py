@@ -74,10 +74,12 @@ all_profiles = profiles.load_all()
 names = [p["name"] for p in all_profiles]
 AUTO, TEMPLATE = "Auto (journal / publisher from guidelines)", "Use my uploaded template"
 choices = ([TEMPLATE] if (tpl_bytes or tex_extras) else []) + [AUTO] + names
-best, _ = profiles.resolve(journal) if journal.strip() else (None, [])
-default = 0 if (tpl_bytes or tex_extras) else (
-    choices.index(best["name"]) if best is not None else choices.index(AUTO))
-fmt_choice = st.selectbox("Format the manuscript as", choices, index=default)
+default = 0 if (tpl_bytes or tex_extras) else choices.index(AUTO)
+fmt_choice = st.selectbox(
+    "Format the manuscript as", choices, index=default,
+    help="Auto finds the journal's real publisher (OpenAlex / guidelines page) and "
+         "applies that journal's own limits from its guidelines. Pick a profile to "
+         "force a format; upload a template for the exact layout.")
 
 f1, f2, f3 = st.columns(3)
 with f1:
@@ -107,20 +109,36 @@ go = st.button("📦 Format & build submission package", type="primary",
                disabled=not (up and (journal or guide_url or pasted or tpl_up)))
 
 
-def resolve_profile(g):
-    if fmt_choice == TEMPLATE:
+def resolve_profile(g, choice):
+    if choice == TEMPLATE:
         prof, _spec = discover.profile_from_template(
             tpl_up.name, tpl_bytes or next(iter(tex_extras.values())))
-        return prof
-    if fmt_choice != AUTO:
-        return next(p for p in all_profiles if p["name"] == fmt_choice)
-    if best is not None:
-        return best
-    base_id, label = discover.detect_publisher(" ".join(g.pages), g.text)
-    spec = {k: v for k, v in discover.extract_spec(g.text).items() if v is not None}
-    return discover.build_profile(g.journal or journal or "Target journal",
-                                  guide_url or (g.homepage or ""), spec, base_id,
-                                  g.publisher or label, [])
+        return prof, f"your uploaded template ({tpl_up.name})"
+    if choice != AUTO:
+        pid = next(p["id"] for p in all_profiles if p["name"] == choice)
+        return sp.choose_profile(journal, g, explicit_id=pid)
+    return sp.choose_profile(journal.strip(), g)
+
+
+def run_build(ms, g, choice, prog=None):
+    prof, why = resolve_profile(g, choice)
+    if prog:
+        prog.progress(0.45, f"Formatting as {prof['name']}…")
+    opt = sp.FormatOptions(template_bytes=tpl_bytes if choice == TEMPLATE else None,
+                           tex_extras=tex_extras if choice == TEMPLATE else {},
+                           equation_mode=eq_mode, keep_masthead=keep_masthead,
+                           float_mode=float_mode, compact=compact_layout,
+                           add_missing_mentions=add_mentions,
+                           include_latex=want_latex, include_pdf=want_pdf)
+    formatted = sp.format_manuscript(ms, prof, opt)
+    if prog:
+        prog.progress(0.8, "Building the submission files…")
+    zbytes, reqs = sp.build_pack(ms, prof, g, fmt=opt, formatted=formatted)
+    ss["sp_result"] = dict(zip=zbytes, reqs=reqs, g=g, prof=prof["name"], why=why,
+                           choice=choice,
+                           formatted={k: formatted[k] for k in
+                                      ("docx", "zip", "pdf", "html", "report",
+                                       "applied", "warning")})
 
 
 if go:
@@ -132,22 +150,10 @@ if go:
     ms = ingest.ingest(path, image_dir=os.path.join(tmp, "img"))
     prog.progress(0.2, "Reading the journal's author guidelines…")
     g = sp.gather_guidelines(journal.strip(), guide_url.strip() or None, pasted)
-    prof = resolve_profile(g)
-    prog.progress(0.45, f"Formatting as {prof['name']}…")
-    opt = sp.FormatOptions(template_bytes=tpl_bytes, tex_extras=tex_extras,
-                           equation_mode=eq_mode, keep_masthead=keep_masthead,
-                           float_mode=float_mode, compact=compact_layout,
-                           add_missing_mentions=add_mentions,
-                           include_latex=want_latex, include_pdf=want_pdf)
-    formatted = sp.format_manuscript(ms, prof, opt)
-    prog.progress(0.8, "Building the submission files…")
-    zbytes, reqs = sp.build_pack(ms, prof, g, fmt=opt, formatted=formatted)
+    ss["sp_ms"], ss["sp_g"] = ms, g
+    run_build(ms, g, fmt_choice, prog)
     prog.progress(1.0, "Done")
     prog.empty()
-    ss["sp_result"] = dict(zip=zbytes, reqs=reqs, g=g, prof=prof["name"],
-                           formatted={k: formatted[k] for k in
-                                      ("docx", "zip", "pdf", "html", "report",
-                                       "applied", "warning")})
 
 # --------------------------------------------------------------------------- #
 # 3. results
@@ -170,8 +176,19 @@ if "sp_result" in ss:
     m2.metric("Files generated", sum(1 for r in reqs if r.status != sp.NOT_FOUND and r.output))
     m3.metric("Need your action", sum(1 for r in reqs if r.status != sp.NOT_FOUND and not r.output))
     m4.metric("Format check failures", fails)
-    st.caption(f"Journal: **{g.journal or '—'}** · formatted as **{R['prof']}** · "
-               f"guidelines from {len(g.pages)} page(s)")
+    st.info(f"**Formatted as {R['prof']}** — {R['why']}.")
+    rc1, rc2 = st.columns([3, 1])
+    with rc1:
+        again = st.selectbox("Not the right format? Re-format as", choices,
+                             index=choices.index(R["choice"]) if R["choice"] in choices else 0,
+                             key="sp_again")
+    with rc2:
+        st.write("")
+        if st.button("Rebuild", use_container_width=True,
+                     disabled=again == R["choice"] or "sp_ms" not in ss):
+            with st.spinner(f"Re-formatting as {again}…"):
+                run_build(ss["sp_ms"], ss["sp_g"], again)
+            st.rerun()
 
     safe = "".join(ch if ch.isalnum() else "_" for ch in (g.journal or "journal"))[:40]
     st.download_button("⬇️ Download complete submission package (.zip)", R["zip"],
