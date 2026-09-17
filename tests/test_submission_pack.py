@@ -98,6 +98,22 @@ def test_pack_contents_and_honesty():
         assert "Within limit" in md and "https://example.org/guide" in md
 
 
+def test_formatter_options_flow_into_pack():
+    with tempfile.TemporaryDirectory() as tmp:
+        ms = ingest.ingest(_docx(tmp), image_dir=os.path.join(tmp, "img"))
+        prof = profiles.get("elsevier_generic")
+        opt = sp.FormatOptions(add_missing_mentions=True, include_latex=True,
+                               include_pdf=False, equation_mode="native")
+        formatted = sp.format_manuscript(ms, prof, opt)
+        assert formatted["docx"] and formatted["zip"] and formatted["html"]
+        g = sp.Guidelines(journal="Renewable Energy", text=GUIDE)
+        zbytes, _ = sp.build_pack(ms, prof, g, fmt=opt, formatted=formatted)
+        names = zipfile.ZipFile(io.BytesIO(zbytes)).namelist()
+        assert any(n.endswith("09_LaTeX_project.zip") for n in names)
+        # the blinded copy comes from the same formatted manuscript
+        assert any(n.endswith("04_Manuscript_blinded.docx") for n in names)
+
+
 def test_gather_follows_publisher_guide_path():
     pages = {
         "https://www.sciencedirect.com/journal/renewable-energy/publish/guide-for-authors":
