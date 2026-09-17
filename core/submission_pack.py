@@ -522,6 +522,78 @@ def blinded(ms: Manuscript) -> Manuscript:
 # --------------------------------------------------------------------------- #
 # 5. package
 # --------------------------------------------------------------------------- #
+# publisher name as OpenAlex / the guidelines write it -> base profile
+PUBLISHER_NAMES = [
+    (r"elsevier|cell press|academic press", "elsevier_generic"),
+    (r"springer|nature portfolio|biomed ?central|bmc\b", "springer_nature"),
+    (r"institute of electrical|\bieee\b", "ieee_access"),
+    (r"\bmdpi\b|multidisciplinary digital", "mdpi"),
+    (r"emerald", "emerald_ijoa"),
+    (r"\bsage\b", "sage"),
+    (r"taylor|informa|routledge", "elsevier_generic"),
+    (r"wiley|blackwell", "elsevier_generic"),
+    (r"hindawi|frontiers", "mdpi"),
+    (r"association for computing|\bacm\b", "ieee_conference"),
+]
+
+
+def choose_profile(journal: str, g: Guidelines,
+                   explicit_id: str | None = None) -> tuple[dict, str]:
+    """The format to apply, and a one-line reason the user can check.
+
+    Order of trust: a profile the user picked; a saved profile whose name or
+    alias really is this journal; the publisher that OpenAlex (or the guide
+    page's own address) names — with the journal's own guideline limits laid
+    on top. Fuzzy name similarity alone is never enough: "Renewable Energy"
+    or "IEEE Transactions on Smart Grid" must not be formatted as whichever
+    generic profile happens to share a word.
+    """
+    from . import profiles, discover
+    if explicit_id:
+        p = profiles.get(explicit_id)
+        return p, f"chosen by you ({p['name']})"
+
+    q = re.sub(r"[^a-z0-9]", "", (journal or "").lower())
+    if q:
+        for p in profiles.load_all():
+            names = [p["name"]] + list(p.get("aliases", []))
+            if any(re.sub(r"[^a-z0-9]", "", n.lower()) == q for n in names):
+                return p, f"saved profile for {journal}"
+
+    base_id, why = None, ""
+    blob = f"{g.publisher or ''}"
+    for pat, pid in PUBLISHER_NAMES:
+        if blob and re.search(pat, blob, re.I):
+            base_id, why = pid, f"publisher {g.publisher} (OpenAlex)"
+            break
+    if not base_id and g.pages:
+        pages = " ".join(x for x in g.pages if x.startswith("http"))
+        for frag, pid, label in discover.PUBLISHER_MAP:
+            if frag in pages.lower():
+                base_id, why = pid, f"publisher {label} (guidelines address)"
+                break
+    if not base_id:
+        best, ranked = profiles.resolve(journal) if journal else (None, [])
+        if best is not None and ranked and ranked[0][1] >= 0.85:
+            base_id, why = best["id"], f"closest saved profile ({best['name']})"
+    if not base_id:
+        base_id, why = "elsevier_generic", "publisher unknown — generic journal layout"
+
+    spec = {k: v for k, v in discover.extract_spec(g.text).items() if v is not None} \
+        if g.text.strip() else {}
+    base = profiles.get(base_id)
+    prof = discover.build_profile(g.journal or journal or base["name"],
+                                  next((x for x in g.pages if x.startswith("http")), ""),
+                                  spec, base_id, base["publisher"], [])
+    applied = [k for k in ("abstract_max_words", "keywords_max", "structured_abstract",
+                           "reference_style", "font", "font_size", "line_spacing",
+                           "columns") if spec.get(k)]
+    if applied:
+        why += " + journal guidelines (" + ", ".join(
+            f"{k.replace('_', ' ')}={spec[k]}" for k in applied[:5]) + ")"
+    return prof, why
+
+
 @dataclass
 class FormatOptions:
     """The formatter's own settings, applied to every manuscript in the pack."""
