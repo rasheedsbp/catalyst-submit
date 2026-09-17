@@ -114,6 +114,24 @@ def test_formatter_options_flow_into_pack():
         assert any(n.endswith("04_Manuscript_blinded.docx") for n in names)
 
 
+def test_choose_profile_uses_real_publisher_and_guidelines():
+    G = sp.Guidelines
+    p, why = sp.choose_profile("Renewable Energy", G(
+        publisher="Elsevier BV",
+        text="The abstract should not exceed 250 words. Provide a maximum of 6 keywords."))
+    assert p["derived_from"] == "elsevier_generic" and "OpenAlex" in why
+    assert p["abstract"]["max_words"] == 250 and p["keywords"]["max"] == 6
+    p, _ = sp.choose_profile("IEEE Transactions on Smart Grid",
+                             G(publisher="Institute of Electrical and Electronics Engineers"))
+    assert p["derived_from"].startswith("ieee")
+    p, why = sp.choose_profile("Sensors", G(publisher="MDPI AG"))
+    assert p["id"] == "mdpi" and "saved profile" in why
+    p, why = sp.choose_profile("Anything", G(), explicit_id="springer_nature")
+    assert p["id"] == "springer_nature" and "chosen by you" in why
+    p, _ = sp.choose_profile("X", G(pages=["https://link.springer.com/journal/1/submission-guidelines"]))
+    assert p["derived_from"] == "springer_nature"
+
+
 def test_gather_follows_publisher_guide_path():
     pages = {
         "https://www.sciencedirect.com/journal/renewable-energy/publish/guide-for-authors":
