@@ -335,8 +335,8 @@ def cover_letter(ms: Manuscript, journal: str, publisher: str | None) -> bytes:
     d.add_paragraph("Dear Editor,")
     d.add_paragraph(
         f"We are pleased to submit our manuscript entitled “{ms.title or PH.format('title')}” "
-        f"for consideration as {PH.format('article type, e.g. an Original Research Article')} "
-        f"in {journal or PH.format('journal name')}.")
+        f"for consideration in {journal or PH.format('journal name')} "
+        f"(article type: {PH.format('e.g. Original Research Article')}).")
     abs_s = _sentences(ms.abstract)
     if abs_s:
         # the authors' own abstract, uncut when short — trimming mid-abstract
