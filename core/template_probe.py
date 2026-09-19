@@ -36,7 +36,8 @@ def probe_docx(data: bytes) -> dict:
 
     spec: dict = {"_source": "word template"}
     try:
-        doc = Document(io.BytesIO(data))
+        from .docx_io import open_document
+        doc = open_document(data)
     except Exception as exc:
         return {"_error": f"not a readable Word file ({exc})"}
 
@@ -74,7 +75,7 @@ def probe_docx(data: bytes) -> dict:
             spec["font_size"] = round(normal.font.size.pt, 1)
         ls = normal.paragraph_format.line_spacing
         if ls:
-            spec["line_spacing"] = round(float(ls), 2)
+            spec["line_spacing"] = round(float(ls), 2) if isinstance(ls, float) else 1.0
     except Exception:
         pass
 
@@ -278,7 +279,8 @@ def inventory(data: bytes) -> dict:
     try:
         from docx import Document
         from docx.text.paragraph import Paragraph as DocxPara
-        doc = Document(io.BytesIO(data))
+        from .docx_io import open_document
+        doc = open_document(data)
     except Exception as exc:
         inv["error"] = str(exc)
         return inv
@@ -290,11 +292,12 @@ def inventory(data: bytes) -> dict:
     for i, child in enumerate(body.iterchildren()):
         if i > 25:
             break
-        if child.tag.split("}")[-1] != "p":
+        tag = child.tag.split("}")[-1]
+        if tag not in ("p", "tbl"):
             continue
-        if child.findall(".//" + A):
-            inv["logos"] += 1
-        txt = DocxPara(child, doc).text.strip()
+        inv["logos"] += len(child.findall(".//" + A))
+        txt = (DocxPara(child, doc).text.strip() if tag == "p" else
+               " ".join(t.text or "" for t in child.iter(W + "t")).strip())
         if txt and len(txt) < 160 and len(inv["masthead_lines"]) < 6:
             inv["masthead_lines"].append(txt)
 

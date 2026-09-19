@@ -273,25 +273,83 @@ _PLACEHOLDER_START = re.compile(
     r"keywords?|index terms)\b", re.I)
 
 
+def _el_text(el) -> str:
+    W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"
+    return " ".join((t.text or "") for t in el.iter(W)).strip()
+
+
+_MASTHEAD_TXT = re.compile(
+    r"issn|e-?issn|doi|vol(ume)?\.?\s*[\dx]|number\s*[\dx]|pages?\s*[\dx]|"
+    r"received|revised|accepted|available online|homepage|journal|"
+    r"©|copyright|https?://|www\.", re.I)
+
+
 def _is_masthead(el, doc) -> bool:
-    """Publisher furniture worth keeping: logos, banners, rule lines, DOI bars."""
-    from docx.text.paragraph import Paragraph as DocxPara
+    """Publisher furniture worth keeping: logos, banners, rule lines, DOI bars.
+
+    Mastheads are frequently a *table* (logo | journal name | seal), which the
+    old check ignored — the whole banner was deleted.
+    """
     tag = el.tag.split("}")[-1]
-    if tag != "p":
+    if tag not in ("p", "tbl"):
         return False
-    if el.findall(".//" + BLIP) or el.findall(".//" + VML_IMG):
-        return True                      # a logo or banner image
-    txt = DocxPara(el, doc).text.strip()
+    has_img = bool(el.findall(".//" + BLIP) or el.findall(".//" + VML_IMG))
+    txt = _el_text(el)
+    if tag == "tbl":
+        return has_img or bool(txt and _MASTHEAD_TXT.search(txt))
+    if has_img:
+        return True
     if not txt:
-        return True                      # spacing paragraph, harmless to keep
+        return True
     if _PLACEHOLDER_START.match(txt):
         return False
-    # short lines near the top: journal name, ISSN, DOI, volume, copyright
-    if len(txt) < 160 and re.search(
-            r"issn|doi|vol(ume)?\.?\s*\d|received:|accepted:|international "
-            r"journal|©|copyright|http", txt, re.I):
+    if len(txt) < 200 and _MASTHEAD_TXT.search(txt):
+        return True
+    if len(txt) <= 12 and txt.isupper():   # journal acronym line, e.g. "JJEE"
         return True
     return False
+
+
+def _template_typography(doc) -> dict:
+    """Read the template's own title/body formatting from its example text.
+
+    Many templates leave Normal at defaults and format the example paragraphs
+    directly, so the *text* is the real spec (e.g. JJEE: 11pt Bookman body,
+    single spaced, 11pt bold title).
+    """
+    from collections import Counter
+    fonts, sizes, spacing = Counter(), Counter(), Counter()
+    title = {}
+    for p in doc.paragraphs[:300]:
+        t = p.text.strip()
+        if not t:
+            continue
+        runs = [r for r in p.runs if r.text.strip()]
+        if not title and runs and all(r.bold for r in runs) and 10 < len(t) < 200 \
+                and p.alignment == WD_ALIGN_PARAGRAPH.CENTER \
+                and not _MASTHEAD_TXT.search(t):
+            sz = next((r.font.size.pt for r in runs if r.font.size), None)
+            title = {"size": sz, "font": next((r.font.name for r in runs if r.font.name), None)}
+        if len(t) < 150:
+            continue
+        for r in runs:
+            if r.font.name:
+                fonts[r.font.name] += len(r.text)
+            if r.font.size:
+                sizes[r.font.size.pt] += len(r.text)
+        ls = p.paragraph_format.line_spacing
+        if isinstance(ls, float):
+            spacing[round(ls, 2)] += 1
+        elif ls is None:
+            spacing[None] += 1
+    out = {"title": title}
+    if fonts:
+        out["body_font"] = fonts.most_common(1)[0][0]
+    if sizes:
+        out["body_size"] = sizes.most_common(1)[0][0]
+    if spacing:
+        out["line_spacing"] = spacing.most_common(1)[0][0]
+    return out
 
 
 def _open_template(template_bytes: bytes, keep_masthead: bool = True):
@@ -307,7 +365,9 @@ def _open_template(template_bytes: bytes, keep_masthead: bool = True):
     page. So leading masthead elements are preserved, and clearing starts at the
     first placeholder ("Title", "Abstract", "First Author"…).
     """
-    doc = Document(io.BytesIO(template_bytes))
+    from .docx_io import open_document
+    doc = open_document(template_bytes)
+    doc._tpl_typo = _template_typography(doc)
     body = doc.element.body
     sectPr = body.find(qn("w:sectPr"))
 
@@ -359,8 +419,21 @@ def _spec_from_doc(doc, prof: dict) -> dict:
             w["body_font"] = normal.font.name
         if normal.font.size is not None:
             w["body_size"] = normal.font.size.pt
+        ls = normal.paragraph_format.line_spacing
+        w["line_spacing"] = round(ls, 2) if isinstance(ls, float) else 1.0
     except Exception:
         pass
+    typo = getattr(doc, "_tpl_typo", {}) or {}
+    for k in ("body_font", "body_size"):
+        if typo.get(k):
+            w[k] = typo[k]
+    if "line_spacing" in typo:
+        w["line_spacing"] = typo["line_spacing"] or 1.0
+    t = typo.get("title") or {}
+    if t.get("size"):
+        w["title_size"] = t["size"]
+    elif w.get("title_size", 0) > w["body_size"] + 4:
+        w["title_size"] = w["body_size"] + 2
     return w
 
 
@@ -375,13 +448,12 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
         page setup are preserved verbatim.
     """
     if template_bytes:
-        try:
-            doc = _open_template(template_bytes, keep_masthead=keep_masthead)
-            w = _spec_from_doc(doc, prof)
-            prof = {**prof, "word": w}
-        except Exception:
-            doc = Document()
-            w = prof["word"]
+        # No silent fallback: a template that cannot be opened must surface as
+        # an error so the caller can warn the user (it used to quietly produce
+        # a generic-profile file that looked like the template was ignored).
+        doc = _open_template(template_bytes, keep_masthead=keep_masthead)
+        w = _spec_from_doc(doc, prof)
+        prof = {**prof, "word": w}
     else:
         doc = Document()
         w = prof["word"]

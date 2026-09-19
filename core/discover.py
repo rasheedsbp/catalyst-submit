@@ -217,7 +217,7 @@ def extract_spec(text: str) -> dict:
     spec["keywords_min"] = kmin
 
     m = re.search(r"\b(Times New Roman|Arial|Calibri|Helvetica|Cambria|"
-                  r"Palatino(?: Linotype)?|Garamond|Book Antiqua)\b", text, re.I)
+                  r"Palatino(?: Linotype)?|Garamond|Bookman Old Style|Book Antiqua)\b", text, re.I)
     spec["font"] = m.group(1) if m else None
 
     spec["font_size"] = _first_int([
@@ -323,7 +323,8 @@ def profile_from_template(filename: str, data: bytes,
         try:
             import io
             from docx import Document
-            d = Document(io.BytesIO(data))
+            from .docx_io import open_document
+            d = open_document(data)
             sample = "\n".join(p.text for p in d.paragraphs[:80])
         except Exception:
             sample = ""
