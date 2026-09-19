@@ -107,12 +107,14 @@ def _fix_table_layout(tb, widths: list[int]):
     layout.set(qn("w:type"), "fixed")
     tblPr.append(layout)
     tblW = OxmlElement("w:tblW")
-    tblW.set(qn("w:w"), str(sum(widths)))
+    # widths arrive in EMU; OOXML table widths are twips (1 twip = 635 EMU)
+    tw = [int(x) // 635 if int(x) > 20000 else int(x) for x in widths]
+    tblW.set(qn("w:w"), str(sum(tw)))
     tblW.set(qn("w:type"), "dxa")
     tblPr.append(tblW)
     grid = tb._tbl.find(qn("w:tblGrid"))
     if grid is not None:
-        for gc, wd in zip(grid.findall(qn("w:gridCol")), widths):
+        for gc, wd in zip(grid.findall(qn("w:gridCol")), tw):
             gc.set(qn("w:w"), str(wd))
     for col, wd in zip(tb.columns, widths):
         col.width = wd
@@ -583,6 +585,24 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
     tabs = {t.label: t for t in ms.tables}
     eqs = {e.label: e for e in ms.equations}
     top_idx = 0
+    _REF = re.compile(r"^\s*(\d+(\.\d+)*\.?\s*)?(references?|bibliography|literature cited)\s*$", re.I)
+
+    def _strip_refs(secs):
+        out = []
+        for sc in secs:
+            if _REF.match(sc.title or ""):
+                if not ms.references:
+                    from .model import Reference
+                    for bk in sc.blocks:
+                        if bk.kind == "para" and bk.text.strip():
+                            ms.references.append(Reference(raw=bk.text.strip()))
+                continue
+            out.append(sc)
+        return out
+    try:
+        ms.sections = _strip_refs(ms.sections)
+    except Exception:
+        pass
     for s in ms.sections:
         if s.level == 1:
             top_idx += 1
@@ -651,7 +671,8 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
                          align=WD_ALIGN_PARAGRAPH.CENTER, space_after=3)
                 if t.rows:
                     tb = doc.add_table(rows=0, cols=ncol)
-                    _apply_table_borders(tb, doc)
+                    if not R.get("tbl"):
+                        _apply_table_borders(tb, doc)
                     tb.autofit = False
                     avail = int(pw - sec.left_margin - sec.right_margin)
                     if not wide and w["columns"] > 1:
@@ -691,6 +712,16 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
                     if ncol >= 4:
                         _tight_cell_margins(tb, 36)   # 0.025" each side
                     _fix_table_layout(tb, widths)
+                    if R.get("tbl"):
+                        tsz = (spec.get("tables") or {}).get("size") or (w["body_size"] - 1)
+                        if ncol >= 12:
+                            tsz = min(tsz, 7.5)
+                        elif ncol >= 10:
+                            tsz = min(tsz, 8)
+                        elif ncol >= 7:
+                            tsz = min(tsz, 9)
+                        _roles.style_table(tb, R["tbl"], tsz,
+                                           (spec.get("tables") or {}).get("font") or w["body_font"])
                 para("", space_after=8)
                 if wide:
                     _span_section(doc, w["columns"], pw, m)
@@ -705,8 +736,10 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
         ref_size = (spec.get("references") or {}).get("size")
         numeric = prof["reference_style"] in ("ieee", "elsevier-numeric",
                                               "multidisciplinary-digital-publishing-institute")
+        tab = (R.get("ref") or {}).get("tab")
         for i, r in enumerate(ms.references, 1):
-            txt = f"[{i}] {r.raw}" if numeric else r.raw
+            raw = re.sub(r"^\s*\[?\d+[\].)]\s*", "", r.raw) if numeric else r.raw
+            txt = f"[{i}]" + ("\t" if tab else " ") + raw if numeric else raw
             p = para(txt, size=ref_size or (w["body_size"] - 1),
                      align=WD_ALIGN_PARAGRAPH.JUSTIFY, space_after=3, role="ref")
             if not numeric:

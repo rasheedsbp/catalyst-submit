@@ -121,15 +121,47 @@ def collect(doc, children) -> dict:
             ex["figcap"] = _snap(p)
         if "tabcap" not in ex and re.match(r"^table\s*\d", t, re.I):
             ex["tabcap"] = _snap(p)
-        if "refhead" not in ex and re.fullmatch(r"references?", t, re.I):
+        if re.fullmatch(r"references?", t, re.I) and (
+                "refhead" not in ex or (ex["refhead"]["numbered"] and lvl is None)):
             ex["refhead"] = _snap(p)
             nxt = [q for j, q in nonempty if j > i][:1]
             if nxt and len(nxt[0].text) > 30:
                 ex["ref"] = _snap(nxt[0])
 
+    # reference entries often sit inside a bibliography field / content
+    # control, which doc.paragraphs does not see — scan every w:p instead
+    if "ref" not in ex or not re.match(r"^\[?\d+[\].]", Paragraph(ex["ref"].get("_el"), doc).text.strip() if ex["ref"].get("_el") is not None else ""):
+        for c in children:
+            for pel in c.iter(W_P):
+                t = "".join(x.text or "" for x in pel.iter(qn("w:t"))).strip()
+                if re.match(r"^\[\d+\]", t) and len(t) > 40:
+                    rp = Paragraph(pel, doc)
+                    snap = _snap(rp, text_run_idx=1 if len([r for r in rp.runs if r.text.strip()]) > 1 else 0)
+                    snap["tab"] = pel.find(".//" + qn("w:tab")) is not None
+                    ex["ref"] = snap
+                    break
+            else:
+                continue
+            break
+
     for c in children:
         if c.tag != W_TBL:
             continue
+        rows = c.findall(qn("w:tr"))
+        if "tbl" not in ex and len(rows) >= 3 and not re.search(r"received|accepted", _text(c), re.I) \
+                and not re.match(r"\s*abstract", _text(c), re.I):
+            tblPr = copy.deepcopy(c.find(qn("w:tblPr")))
+            for tag in ("w:tblW", "w:tblLayout", "w:tblCellMar", "w:tblStyle"):
+                for e in tblPr.findall(qn(tag)):
+                    tblPr.remove(e)
+            def _tc(row):
+                tc = row.find(qn("w:tc"))
+                pr = tc.find(qn("w:tcPr")) if tc is not None else None
+                return copy.deepcopy(pr) if pr is not None else None
+            p0 = rows[1].find(".//" + W_P)
+            cell_pPr = copy.deepcopy(p0.find(qn("w:pPr"))) if p0 is not None and p0.find(qn("w:pPr")) is not None else None
+            ex["tbl"] = {"tblPr": tblPr, "head": _tc(rows[0]), "body": _tc(rows[1]),
+                         "cell_pPr": cell_pPr}
         txt = _text(c)
         if "abs_tbl" not in ex and re.search(r"abstract", txt, re.I) and len(txt) < 3000:
             ex["abs_tbl"] = copy.deepcopy(c)
@@ -137,6 +169,49 @@ def collect(doc, children) -> dict:
         if spec:
             ex["spec"] = spec
     return ex
+
+
+def style_table(tb, role: dict, size: float, font: str | None) -> None:
+    """Give a generated table the template's own table look (rules, shading,
+    centring, cell spacing) instead of a full grid."""
+    from docx.shared import Pt
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    tbl = tb._tbl
+    old = tbl.tblPr
+    new = copy.deepcopy(role["tblPr"])
+    for tag in ("w:tblW", "w:tblLayout", "w:tblCellMar"):
+        e = old.find(qn(tag))
+        if e is not None:
+            new.append(copy.deepcopy(e))
+    tbl.replace(old, new)
+    keep = {qn("w:tcBorders"), qn("w:shd"), qn("w:vAlign")}
+    for ri, tr in enumerate(tbl.findall(qn("w:tr"))):
+        src = role["head"] if ri == 0 else role["body"]
+        for tc in tr.findall(qn("w:tc")):
+            tcPr = tc.get_or_add_tcPr()
+            for e in list(tcPr):
+                if e.tag in keep:
+                    tcPr.remove(e)
+            if src is not None:
+                for e in src:
+                    if e.tag in keep:
+                        tcPr.append(copy.deepcopy(e))
+            for pel in tc.findall(W_P):
+                para = Paragraph(pel, None)
+                if role.get("cell_pPr") is not None:
+                    old_p = pel.find(qn("w:pPr"))
+                    if old_p is not None:
+                        pel.remove(old_p)
+                    pp = copy.deepcopy(role["cell_pPr"])
+                    rp = pp.find(qn("w:rPr"))
+                    if rp is not None:
+                        pp.remove(rp)
+                    pel.insert(0, pp)
+                para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for r in para.runs:
+                    r.font.size = Pt(size)
+                    if font:
+                        r.font.name = font
 
 
 def skin(p, role: dict, keep_run_style: bool = False) -> None:
