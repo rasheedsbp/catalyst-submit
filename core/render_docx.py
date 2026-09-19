@@ -16,6 +16,7 @@ from . import omml as _omml
 from . import eqimage as _eqimg
 from .model import Manuscript
 from . import inline_math as _im
+from . import template_roles as _roles
 
 ROMAN = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
          "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX"]
@@ -392,6 +393,8 @@ def _open_template(template_bytes: bytes, keep_masthead: bool = True):
             else:
                 break
 
+    doc._roles = _roles.collect(doc, children)
+    _roles.keep_header_refs(body)
     for child in children[start:]:
         body.remove(child)
     return doc
@@ -490,8 +493,16 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
         sec.top_margin, sec.bottom_margin = Inches(m["top"]), Inches(m["bottom"])
         sec.left_margin, sec.right_margin = Inches(m["left"]), Inches(m["right"])
 
+    R = getattr(doc, "_roles", {}) or {}
+    spec = R.get("spec", {})
+
     def para(text="", size=None, bold=False, italic=False, align=None,
-             space_before=0, space_after=6, indent=0.0):
+             space_before=0, space_after=6, indent=0.0, role=None):
+        if role and R.get(role):
+            p = doc.add_paragraph()
+            p.add_run(text)
+            _roles.skin(p, R[role])
+            return p
         p = doc.add_paragraph()
         r = p.add_run(text)
         r.bold, r.italic = bold, italic
@@ -507,18 +518,19 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
 
     # ---- title block (single column even in 2-col layouts) ----------------
     para(ms.title, size=w["title_size"], bold=True,
-         align=WD_ALIGN_PARAGRAPH.CENTER, space_after=10)
+         align=WD_ALIGN_PARAGRAPH.CENTER, space_after=10, role="title")
     if ms.authors:
         para(", ".join(a.name for a in ms.authors), size=w["body_size"] + 1,
-             align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
-        affs = [a.affiliation for a in ms.authors if a.affiliation]
-        if affs:
-            para(affs[0], size=w["body_size"] - 1, italic=True,
-                 align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
+             align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2, role="authors")
+        affs = list(dict.fromkeys(a.affiliation for a in ms.authors if a.affiliation))
+        for af in affs[:4]:
+            para(af, size=w["body_size"] - 1, italic=True,
+                 align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2, role="affil")
         emails = [a.email for a in ms.authors if a.email]
         if emails:
-            para(", ".join(emails), size=w["body_size"] - 1,
-                 align=WD_ALIGN_PARAGRAPH.CENTER, space_after=10)
+            para("E-mail: " + ", ".join(emails), size=w["body_size"] - 1,
+                 align=WD_ALIGN_PARAGRAPH.CENTER, space_after=10,
+                 role="email" if R.get("email") else "affil")
 
     if w["columns"] > 1:
         new = doc.add_section(WD_SECTION.CONTINUOUS)
@@ -529,7 +541,16 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
 
     # ---- abstract ---------------------------------------------------------
     ab_type = prof.get("abstract", {}).get("type", "plain")
-    if ab_type == "structured" and ms.structured_abstract:
+    kw_sep = "; " if R.get("abs_tbl") is not None else ", "
+    if R.get("abs_tbl") is not None and (ms.abstract or ms.structured_abstract):
+        doc.add_paragraph()
+        tbl = __import__("copy").deepcopy(R["abs_tbl"])
+        abs_txt = ms.abstract or " ".join(f"{k}: {v}" for k, v in ms.structured_abstract.items())
+        kws = kw_sep.join(_case(k, "sentence") for k in ms.keywords)
+        _roles.fill_abstract_table(tbl, doc, abs_txt, kws + ("." if kws else ""))
+        doc.paragraphs[-1]._p.addnext(tbl)
+        doc.add_paragraph()
+    elif ab_type == "structured" and ms.structured_abstract:
         for k, v in ms.structured_abstract.items():
             p = doc.add_paragraph()
             r = p.add_run(f"{k} – ")
@@ -548,7 +569,7 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
         r2.italic = prof["publisher"] == "IEEE"
         p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
-    if ms.keywords:
+    if ms.keywords and R.get("abs_tbl") is None:
         label = "Index Terms— " if prof["publisher"] == "IEEE" else "Keywords: "
         kws = ", ".join(_case(k, prof.get("keywords", {}).get("case", "lower"))
                         for k in ms.keywords)
@@ -565,17 +586,35 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
     for s in ms.sections:
         if s.level == 1:
             top_idx += 1
+            title = re.sub(r"^\s*(\d+(\.\d+)*|[IVXLC]+)\.?\s+", "", s.title)
+            if R.get("h1"):
+                h = R["h1"]
+                txt = title.upper() if h["upper"] else _case(title, w["heading_case"])
+                if not h["numbered"]:
+                    txt = _num(top_idx, w["heading_numbering"]) + txt
+                para(txt, role="h1")
+                sub_idx = 0
+                goto_blocks = True
+            else:
+                goto_blocks = False
+        if s.level == 1 and not goto_blocks:
             heading = _num(top_idx, w["heading_numbering"]) + _case(s.title, w["heading_case"])
             para(heading, size=w["body_size"] + 1, bold=True,
                  align=WD_ALIGN_PARAGRAPH.CENTER if prof["publisher"] == "IEEE" else None,
                  space_before=10, space_after=4)
-        else:
-            para(_case(s.title, "sentence"), bold=True, italic=True,
-                 space_before=6, space_after=3)
+        elif s.level > 1:
+            role = "h2" if s.level == 2 else ("h3" if R.get("h3") else "h2")
+            title = re.sub(r"^\s*\d+(\.\d+)+\.?\s+", "", s.title)
+            if R.get(role) and not R[role]["numbered"]:
+                title = s.title
+            para(_case(title, "sentence"), bold=True, italic=True,
+                 space_before=6, space_after=3, role=role)
 
         for b in s.blocks:
             if b.kind == "para":
                 p = _para_with_math(doc, b, w, para, equation_mode)
+                if R.get("body") and p is not None:
+                    _roles.skin(p, R["body"], keep_run_style=True)
             elif b.kind == "equation" and b.ref in eqs:
                 _add_equation(doc, eqs[b.ref], w, equation_mode)
             elif b.kind == "figure" and b.ref in figs:
@@ -590,7 +629,7 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
                 fcap = _im.to_plain(f.caption)
                 cap_txt = f"Fig. {n}. {fcap}" if fcap else f"Fig. {n}."
                 para(cap_txt, size=w["body_size"] - 1,
-                     align=WD_ALIGN_PARAGRAPH.CENTER, space_after=8)
+                     align=WD_ALIGN_PARAGRAPH.CENTER, space_after=8, role="figcap")
             elif b.kind == "table" and b.ref in tabs:
                 t = tabs[b.ref]
                 n = "".join(ch for ch in t.label if ch.isdigit()) or "1"
@@ -601,9 +640,13 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
                 if wide:
                     _span_section(doc, 1, pw, m)
 
-                para(f"TABLE {n}", size=w["body_size"] - 1, bold=True,
-                     align=WD_ALIGN_PARAGRAPH.CENTER, space_before=6, space_after=0)
-                if t.caption:
+                if R.get("tabcap"):
+                    cap = _im.to_plain(t.caption) if t.caption else ""
+                    para(f"Table {n}. {cap}".strip(), role="tabcap")
+                else:
+                    para(f"TABLE {n}", size=w["body_size"] - 1, bold=True,
+                         align=WD_ALIGN_PARAGRAPH.CENTER, space_before=6, space_after=0)
+                if t.caption and not R.get("tabcap"):
                     para(_im.to_plain(t.caption), size=w["body_size"] - 1,
                          align=WD_ALIGN_PARAGRAPH.CENTER, space_after=3)
                 if t.rows:
@@ -628,7 +671,7 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
                         if drift:
                             widths[widths.index(max(widths))] += drift
                     # shrink type for dense tables so cells stop wrapping
-                    fsize = w["body_size"] - 2
+                    fsize = (spec.get("tables") or {}).get("size") or (w["body_size"] - 2)
                     if ncol >= 6:
                         fsize = w["body_size"] - 3.5
                     elif ncol >= 4:
@@ -655,15 +698,17 @@ def render(ms: Manuscript, prof: dict, equation_mode: str = "image",
     # ---- references -------------------------------------------------------
     if ms.references:
         top_idx += 1
-        para(_case("References", w["heading_case"]), size=w["body_size"] + 1, bold=True,
+        para("REFERENCES" if (R.get("refhead") or {}).get("upper")
+             else _case("References", w["heading_case"]), size=w["body_size"] + 1, bold=True,
              align=WD_ALIGN_PARAGRAPH.CENTER if prof["publisher"] == "IEEE" else None,
-             space_before=10, space_after=4)
+             space_before=10, space_after=4, role="refhead")
+        ref_size = (spec.get("references") or {}).get("size")
         numeric = prof["reference_style"] in ("ieee", "elsevier-numeric",
                                               "multidisciplinary-digital-publishing-institute")
         for i, r in enumerate(ms.references, 1):
             txt = f"[{i}] {r.raw}" if numeric else r.raw
-            p = para(txt, size=w["body_size"] - 1, align=WD_ALIGN_PARAGRAPH.JUSTIFY,
-                     space_after=3)
+            p = para(txt, size=ref_size or (w["body_size"] - 1),
+                     align=WD_ALIGN_PARAGRAPH.JUSTIFY, space_after=3, role="ref")
             if not numeric:
                 p.paragraph_format.left_indent = Inches(0.5)
                 p.paragraph_format.first_line_indent = Inches(-0.5)
